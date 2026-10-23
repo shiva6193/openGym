@@ -1,0 +1,64 @@
+name: Build unsigned iOS IPA
+
+# Run it by hand: Actions tab -> "Build unsigned iOS IPA" -> Run workflow
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use the newest stable Xcode on the runner
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build the web bundle and sync it into the iOS project
+        working-directory: frontend
+        run: |
+          npm ci || npm install
+          npm run build:mobile
+
+      - name: Install CocoaPods dependencies (only if the project uses them)
+        working-directory: frontend/ios/App
+        run: |
+          if [ -f Podfile ]; then pod install; else echo "No Podfile, skipping"; fi
+
+      - name: Archive without code signing
+        working-directory: frontend/ios/App
+        run: |
+          if [ -d App.xcworkspace ]; then
+            TARGET="-workspace App.xcworkspace"
+          else
+            TARGET="-project App.xcodeproj"
+          fi
+          xcodebuild $TARGET \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -archivePath "$PWD/build/App.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            archive
+
+      - name: Package the .ipa
+        working-directory: frontend/ios/App/build
+        run: |
+          mkdir -p Payload
+          cp -R App.xcarchive/Products/Applications/*.app Payload/
+          zip -r openGym-unsigned.ipa Payload
+
+      - name: Upload the .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: openGym-unsigned-ipa
+          path: frontend/ios/App/build/openGym-unsigned.ipa
